@@ -7,24 +7,18 @@ use App\Models\User;
 use Illuminate\Http\Response;
 use Illuminate\View\View;
 use Illuminate\Http\RedirectResponse;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
-
 
 class SiswaController extends Controller
 {
     public function index(): View
     {
-        $siswas = DB::table('siswas')
-            ->join('users', 'siswas.id_user', '=', 'users.id')
-            ->select('siswas.*', 'users.name', 'users.email', 'siswas.hp');
+        $siswas = Siswa::with('user')->paginate(10);
 
         if (request('cari')) {
             $siswas = $this->search(request('cari'));
-        } else {
-            $siswas = $siswas->paginate(10);
         }
 
         return view('admin.siswa.index', compact('siswas'));
@@ -49,14 +43,18 @@ class SiswaController extends Controller
             'hp' => 'required|numeric',
         ]);
 
-        $image = $request->file('image');
-        $imagePath = $image->storeAs('siswas', $image->hashName(), 'public');
+        $image = $request->file('image')->store('siswas', 'public');
 
-        $id_akun = $this->insertAccount($request->name, $request->email, $request->password);
+        $user = User::create([
+            'name' => $request->name,
+            'email' => $request->email,
+            'password' => Hash::make($request->password),
+            'usertype' => 'siswa'
+        ]);
 
         Siswa::create([
-            'id_user' => $id_akun,
-            'image' => $image->hashName(),
+            'id_user' => $user->id,
+            'image' => basename($image),
             'nis' => $request->nis,
             'tingkatan' => $request->tingkatan,
             'jurusan' => $request->jurusan,
@@ -68,47 +66,27 @@ class SiswaController extends Controller
         return redirect()->route('siswa.index')->with(['success' => 'Data Berhasil Disimpan!']);
     }
 
-    public function insertAccount(string $name, string $email, string $password)
-    {
-        $user = User::create([
-            'name' => $name,
-            'email' => $email,
-            'password' => Hash::make($password),
-            'usertype' => 'siswa'
-        ]);
-
-        return $user->id;
-    }
-
     public function show(string $id): View
     {
-        $siswa = DB::table('siswas')
-            ->join('users', 'siswas.id_user', '=', 'users.id')
-            ->select('siswas.*', 'users.name', 'users.email')
-            ->where('siswas.id', $id)
-            ->first();
+        $siswa = Siswa::with('user')->findOrFail($id);
 
         return view('admin.siswa.show', compact('siswa'));
     }
 
     public function search(string $cari)
     {
-        return DB::table('siswas')
-            ->join('users', 'siswas.id_user', '=', 'users.id')
-            ->select('siswas.*', 'users.name', 'users.email')
-            ->where('users.name', 'like', '%' . $cari . '%')
-            ->orWhere('siswas.nis', 'like', '%' . $cari . '%')
-            ->orWhere('users.email', 'like', '%' . $cari . '%')
+        return Siswa::with('user')
+            ->whereHas('user', function ($query) use ($cari) {
+                $query->where('name', 'like', '%' . $cari . '%')
+                      ->orWhere('email', 'like', '%' . $cari . '%');
+            })
+            ->orWhere('nis', 'like', '%' . $cari . '%')
             ->paginate(10);
     }
 
     public function edit(string $id): View
     {
-        $siswa = DB::table('siswas')
-            ->join('users', 'siswas.id_user', '=', 'users.id')
-            ->select('siswas.*', 'users.name', 'users.email')
-            ->where('siswas.id', $id)
-            ->first();
+        $siswa = Siswa::with('user')->findOrFail($id);
 
         return view('admin.siswa.edit', compact('siswa'));
     }
@@ -126,56 +104,29 @@ class SiswaController extends Controller
             'status' => 'required'
         ]);
 
-        $datas = Siswa::findOrFail($id);
-        $this->editAccount($request->name, $id);
+        $siswa = Siswa::with('user')->findOrFail($id);
+        $siswa->user->update(['name' => $request->name]);
 
         if ($request->hasFile('image')) {
-            Storage::delete('public/siswas/' . $datas->image);
+            Storage::delete('public/siswas/' . $siswa->image);
 
-            $image = $request->file('image');
-            $imagePath = $image->storeAs('siswas', $image->hashName(), 'public');
-
-            $datas->update([
-                'image' => $image->hashName(),
-                'nis' => $request->nis,
-                'tingkatan' => $request->tingkatan,
-                'jurusan' => $request->jurusan,
-                'kelas' => $request->kelas,
-                'hp' => $request->hp,
-                'status' => $request->status
-            ]);
-        } else {
-            $datas->update($request->only(['nis', 'tingkatan', 'jurusan', 'kelas', 'hp', 'status']));
+            $image = $request->file('image')->store('siswas', 'public');
+            $siswa->update(['image' => basename($image)]);
         }
+
+        $siswa->update($request->only(['nis', 'tingkatan', 'jurusan', 'kelas', 'hp', 'status']));
 
         return redirect()->route('siswa.index')->with(['success' => 'Data Berhasil Diubah!']);
     }
 
-    public function editAccount(string $name, string $id)
-    {
-        $siswa = DB::table('siswas')->where('id', $id)->value('id_user');
-        $user = User::findOrFail($siswa);
-
-        $user->update(['name' => $name]);
-    }
-
     public function destroy($id): RedirectResponse
     {
-        $post = Siswa::findOrFail($id);
+        $siswa = Siswa::with('user')->findOrFail($id);
 
-        Storage::delete('public/siswas/' . $post->image);
-
-        $this->destroyUser($id);
-        $post->delete();
+        Storage::delete('public/siswas/' . $siswa->image);
+        $siswa->user->delete();
+        $siswa->delete();
 
         return redirect()->route('siswa.index')->with(['success' => 'Data Berhasil Dihapus!']);
-    }
-
-    public function destroyUser(string $id)
-    {
-        $siswa = DB::table('siswas')->where('id', $id)->value('id_user');
-        $user = User::findOrFail($siswa);
-
-        $user->delete();
     }
 }
